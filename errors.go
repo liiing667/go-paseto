@@ -87,6 +87,10 @@ var errorPayloadShort = newTokenError(fmt.Errorf("payload is not long enough to 
 var errorBadSignature = newTokenError(fmt.Errorf("bad signature"))
 var errorBadMAC = newTokenError(fmt.Errorf("bad message authentication code"))
 
+func errorDuplicateClaim(key string) error {
+	return newTokenError(fmt.Errorf("claims JSON contains duplicate key `%s'", key))
+}
+
 var errorKeyInvalid = fmt.Errorf("key was not valid")
 
 func errorDecrypt(err error) error {

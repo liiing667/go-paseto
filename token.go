@@ -1,8 +1,10 @@
 package paseto
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"time"
 )
 
@@ -46,13 +48,71 @@ func MakeToken(claims map[string]interface{}, footer []byte) (*Token, error) {
 
 // NewTokenFromClaimsJSON parses the JSON using encoding/json in claimsData
 // and returns a token with those claims, and the specified footer.
+// Duplicate top-level claim keys are rejected, as encoding/json would
+// otherwise silently keep only the last value.
 func NewTokenFromClaimsJSON(claimsData []byte, footer []byte) (*Token, error) {
-	var claims map[string]json.RawMessage
-	if err := json.Unmarshal(claimsData, &claims); err != nil {
+	claims, err := parseClaims(claimsData)
+	if err != nil {
 		return nil, err
 	}
 
 	return makeToken(claims, footer)
+}
+
+// parseClaims decodes the top-level claims object, rejecting duplicate keys
+// (which encoding/json would silently collapse, keeping the last value).
+func parseClaims(claimsData []byte) (map[string]json.RawMessage, error) {
+	decoder := json.NewDecoder(bytes.NewReader(claimsData))
+
+	first, err := decoder.Token()
+	if err != nil {
+		return nil, err
+	}
+
+	if first == nil {
+		// JSON null decodes to an empty claim set
+		return make(map[string]json.RawMessage), nil
+	}
+
+	if delim, ok := first.(json.Delim); !ok || delim != '{' {
+		return nil, fmt.Errorf("claims must be a JSON object")
+	}
+
+	claims := make(map[string]json.RawMessage)
+
+	for decoder.More() {
+		keyToken, err := decoder.Token()
+		if err != nil {
+			return nil, err
+		}
+
+		key, ok := keyToken.(string)
+		if !ok {
+			return nil, fmt.Errorf("claims keys must be strings")
+		}
+
+		if _, exists := claims[key]; exists {
+			return nil, errorDuplicateClaim(key)
+		}
+
+		var value json.RawMessage
+		if err := decoder.Decode(&value); err != nil {
+			return nil, err
+		}
+
+		claims[key] = value
+	}
+
+	// consume the closing delimiter of the claims object
+	if _, err := decoder.Token(); err != nil {
+		return nil, err
+	}
+
+	if _, err := decoder.Token(); err != io.EOF {
+		return nil, fmt.Errorf("unexpected data after claims JSON")
+	}
+
+	return claims, nil
 }
 
 // Set sets the key with the specified value. Note that this value needs to
